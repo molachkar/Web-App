@@ -1,125 +1,146 @@
 """
 core/cache.py
-Simple JSON-based cache with per-key TTL.
-Used to avoid hammering yfinance / FRED on every page load.
+Two caching layers:
 
-Usage:
-    from core.cache import cache
-    cache.set("signal", payload, ttl=3600)
-    result = cache.get("signal")   # None if expired or missing
+  disk  — daily JSON file for the full ML data pipeline (survives restarts)
+  mem   — TTL in-memory dict for FastAPI route responses (per-process, fast)
+
+Usage in server.py:
+    from core.cache import disk, mem
+    mem.get("prices") / mem.set("prices", result, ttl=30)
+    disk.save(...) / disk.load()
 """
 
 import json
-import os
-import time
-import threading
 import logging
-from typing import Any, Optional
+import os
+import threading
+import time
+from datetime import datetime
+from typing import Any
 
-from core.config import PROJECT_ROOT, CACHE_TTL_SECONDS
+import pandas as pd
+
+from core.config import CACHE_FILE
 
 log = logging.getLogger("sentinel.cache")
 
-CACHE_FILE = os.path.join(PROJECT_ROOT, ".cache.json")
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  DISK CACHE  —  daily ML pipeline data
+# ══════════════════════════════════════════════════════════════════════════════
 
-class DiskCache:
-    """
-    Thread-safe, TTL-aware JSON cache backed by a single flat file.
+class _DiskCache:
 
-    Each entry is stored as:
-        { "value": <any JSON-serialisable>, "expires_at": <unix timestamp> }
-
-    The in-memory dict is the source of truth during a run; the file is
-    written on every set() and read on startup so data survives restarts
-    within the same calendar day.
-    """
-
-    def __init__(self, path: str = CACHE_FILE):
-        self._path = path
-        self._lock = threading.Lock()
-        self._store: dict[str, dict] = {}
-        self._load()
-
-    # ── private ───────────────────────────────────────────────────────────────
-    def _load(self):
-        if os.path.exists(self._path):
-            try:
-                with open(self._path, "r", encoding="utf-8") as f:
-                    self._store = json.load(f)
-                log.debug(f"Cache loaded from {self._path} ({len(self._store)} keys)")
-            except Exception as exc:
-                log.warning(f"Cache file unreadable, starting fresh: {exc}")
-                self._store = {}
-
-    def _save(self):
+    def save(self, df: pd.DataFrame, fred_ages: dict, fill_report: dict,
+             fetch_log: dict, candle_note: str, fred_warnings: list) -> None:
+        today = datetime.today().strftime("%Y-%m-%d")
+        payload = {
+            "date":          today,
+            "df":            df.to_json(),
+            "fred_ages":     fred_ages,
+            "fill_report":   fill_report,
+            "fetch_log":     fetch_log,
+            "candle_note":   candle_note,
+            "fred_warnings": fred_warnings,
+        }
         try:
-            with open(self._path, "w", encoding="utf-8") as f:
-                json.dump(self._store, f, default=str)
-        except Exception as exc:
-            log.warning(f"Cache write failed: {exc}")
+            with open(CACHE_FILE, "w") as f:
+                json.dump(payload, f)
+            log.info(f"Disk cache saved for {today}")
+        except Exception as e:
+            log.warning(f"Disk cache write failed: {e}")
 
-    def _is_valid(self, entry: dict) -> bool:
-        return time.time() < entry.get("expires_at", 0)
-
-    # ── public ────────────────────────────────────────────────────────────────
-    def get(self, key: str) -> Optional[Any]:
-        """Return cached value if present and not expired, else None."""
-        with self._lock:
-            entry = self._store.get(key)
-            if entry and self._is_valid(entry):
-                log.debug(f"Cache HIT  [{key}]")
-                return entry["value"]
-            if entry:
-                log.debug(f"Cache MISS [{key}] (expired)")
+    def load(self):
+        """Returns tuple or None if missing/stale/corrupt."""
+        if not os.path.exists(CACHE_FILE):
+            return None
+        try:
+            with open(CACHE_FILE, "r") as f:
+                payload = json.load(f)
+            today = datetime.today().strftime("%Y-%m-%d")
+            if payload.get("date") != today:
+                os.remove(CACHE_FILE)
+                log.info("Stale disk cache purged")
+                return None
+            df = pd.read_json(payload["df"])
+            df.index = pd.to_datetime(df.index)
+            df.index.name = "Date"
+            df.sort_index(inplace=True)
+            log.info(f"Disk cache hit — {today}")
+            return (
+                df,
+                payload["fred_ages"],
+                payload["fill_report"],
+                payload["fetch_log"],
+                payload["candle_note"],
+                payload["fred_warnings"],
+            )
+        except Exception as e:
+            log.warning(f"Disk cache read failed: {e}")
+            try:
+                os.remove(CACHE_FILE)
+            except Exception:
+                pass
             return None
 
-    def set(self, key: str, value: Any, ttl: int = CACHE_TTL_SECONDS) -> None:
-        """Store value under key, expiring after ttl seconds."""
+    def invalidate(self) -> None:
+        try:
+            if os.path.exists(CACHE_FILE):
+                os.remove(CACHE_FILE)
+                log.info("Disk cache invalidated")
+        except Exception as e:
+            log.warning(f"Disk cache invalidation failed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MEM CACHE  —  TTL route cache for FastAPI endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _MemCache:
+
+    def __init__(self):
+        self._store: dict[str, dict] = {}
+        self._lock = threading.RLock()
+
+    def get(self, key: str) -> Any | None:
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            if time.monotonic() > entry["expires_at"]:
+                del self._store[key]
+                return None
+            return entry["value"]
+
+    def set(self, key: str, value: Any, ttl: int = 60) -> None:
         with self._lock:
             self._store[key] = {
                 "value":      value,
-                "expires_at": time.time() + ttl,
+                "expires_at": time.monotonic() + ttl,
                 "cached_at":  time.time(),
             }
-            self._save()
-        log.debug(f"Cache SET  [{key}] ttl={ttl}s")
 
-    def delete(self, key: str) -> None:
-        """Remove a key from the cache."""
+    def invalidate(self, key: str | None = None) -> None:
         with self._lock:
-            self._store.pop(key, None)
-            self._save()
+            if key is None:
+                self._store.clear()
+                log.info("Mem cache fully cleared")
+            elif key in self._store:
+                del self._store[key]
 
-    def invalidate_all(self) -> None:
-        """Wipe the entire cache (force full refresh on next request)."""
+    def stats(self) -> dict:
         with self._lock:
-            self._store.clear()
-            self._save()
-        log.info("Cache invalidated (all keys cleared)")
-
-    def age(self, key: str) -> Optional[float]:
-        """Return seconds since this key was cached, or None if missing/expired."""
-        with self._lock:
-            entry = self._store.get(key)
-            if entry and self._is_valid(entry):
-                return time.time() - entry.get("cached_at", time.time())
-            return None
-
-    def status(self) -> dict:
-        """Return a summary dict for the /status endpoint."""
-        now = time.time()
-        out = {}
-        with self._lock:
-            for k, v in self._store.items():
-                expires_in = v.get("expires_at", 0) - now
-                out[k] = {
-                    "valid":      expires_in > 0,
-                    "expires_in": round(max(expires_in, 0)),
-                    "age":        round(now - v.get("cached_at", now)),
+            now = time.monotonic()
+            return {
+                k: {
+                    "ttl_remaining": round(max(0, v["expires_at"] - now), 1),
+                    "cached_at":     v["cached_at"],
                 }
-        return out
+                for k, v in self._store.items()
+            }
 
 
-# Module-level singleton — import and use directly
-cache = DiskCache()
+# ── Singletons ────────────────────────────────────────────────────────────────
+disk = _DiskCache()
+mem  = _MemCache()

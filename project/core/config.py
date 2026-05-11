@@ -1,73 +1,75 @@
 """
 core/config.py
-All constants, thresholds, paths, and API keys for the Sentinel trading terminal.
-No dependencies on other project modules.
+Single source of truth for all constants, thresholds, paths, and API keys.
+Zero dependencies — no imports from within the project.
 """
 
 import os
+from pathlib import Path
 from datetime import timezone, timedelta
 
-# ── ROOT ──────────────────────────────────────────────────────────────────────
-# Get the directory where this config file is located
-CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-# Project root is one level up from core/config.py (since core/ is inside project/)
-PROJECT_ROOT = CONFIG_DIR  # Already at project level since we're in core/
-if os.path.basename(CONFIG_DIR) == "core":
-    PROJECT_ROOT = os.path.dirname(CONFIG_DIR)
+# ── Project root ───────────────────────────────────────────────────────────────
+PROJECT_ROOT   = Path(__file__).resolve().parent.parent
+BASE_DIR       = PROJECT_ROOT
+ARTEFACT_DIR   = PROJECT_ROOT / "ml" / "artefacts"
+FRED_CACHE_DIR = PROJECT_ROOT / "fred_cache"
+FRONTEND_DIR   = PROJECT_ROOT / "frontend"
+CACHE_FILE     = PROJECT_ROOT / "daily_cache.json"
 
-ARTEFACT_DIR  = os.path.join(PROJECT_ROOT, "ml", "artefacts")
-FRED_CACHE_DIR = os.path.join(PROJECT_ROOT, "fred_cache")
-FRONTEND_DIR  = os.path.join(PROJECT_ROOT, "frontend")
+# ── API keys (set FRED_API_KEY env var in production) ────────────────────────
+FRED_API_KEY = os.getenv("FRED_API_KEY", "219d0c44b2e3b4a8b690c3f69b91a5bb")
 
-# ── TIMEZONES ─────────────────────────────────────────────────────────────────
-NY_TZ      = timezone(timedelta(hours=-5))   # EST (no DST handling; adjust if needed)
-MOROCCO_TZ = timezone(timedelta(hours=1))    # WAT (Morocco)
-UTC_TZ     = timezone.utc
+# ── ML pipeline thresholds ────────────────────────────────────────────────────
+DAYS_BACK       = 520
+PROB_THRESHOLD  = 0.45
+Z_THRESHOLD     = 0.6
+PRED_Z_LOOKBACK = 252
 
-# ── TRADING SESSION TIMES (NY hours, 24h float) ──────────────────────────────
-SETTLEMENT_NY_HOUR   = 13.5   # 13:30 NY = gold daily close
-MAINTENANCE_START_NY = 21.25  # 21:15 NY = CME maintenance window start
-MAINTENANCE_END_NY   = 22.0   # 22:00 NY = CME maintenance window end
-
-# ── ML MODEL ─────────────────────────────────────────────────────────────────
-DAYS_BACK       = 520          # how far back to fetch for feature engineering
-PROB_THRESHOLD  = 0.45         # minimum calibrated probability to emit BUY/SELL
-Z_THRESHOLD     = 0.6          # minimum |pred_z| to emit BUY/SELL
-PRED_Z_LOOKBACK = 252          # rolling window (trading days) for z-score normalisation
-
+# Must exactly match what the trained model/calibrator was built on
 BASE_FEATURES = [
-    "Close_Returns",
-    "Log_Returns",
-    "EURUSD_Returns",
-    "USDJPY_Returns",
-    "BB_PctB",
-    "Price_Over_EMA50",
-    "Price_Over_EMA200",
-    "MACD_Signal_Norm",
-    "LogReturn_ZScore",
-    "Return_ZScore",
-    "Return_Percentile",
-    "Volume_Percentile",
-    "Pct_From_AllTimeHigh",
-    "Bull_Trend",
-    "Macro_Fast",
+    "Close_Returns", "Log_Returns", "EURUSD_Returns", "USDJPY_Returns",
+    "BB_PctB", "Price_Over_EMA50", "Price_Over_EMA200", "MACD_Signal_Norm",
+    "LogReturn_ZScore", "Return_ZScore", "Return_Percentile", "Volume_Percentile",
+    "Pct_From_AllTimeHigh", "Bull_Trend", "Macro_Fast",
 ]
 
 CALIB_FEATURES = [
-    "prediction_value",
-    "abs_prediction",
-    "Bull_Trend",
-    "Macro_Fast",
-    "BB_PctB",
-    "Price_Over_EMA200",
+    "prediction_value", "abs_prediction",
+    "Bull_Trend", "Macro_Fast", "BB_PctB", "Price_Over_EMA200",
 ]
 
-# ── FRED MACRO SERIES ─────────────────────────────────────────────────────────
-FRED_API_KEY  = "219d0c44b2e3b4a8b690c3f69b91a5bb"
-MACRO_SERIES  = ["DFII10", "DFII5", "DGS2", "FEDFUNDS"]
+# ── FRED macro series ─────────────────────────────────────────────────────────
+MACRO_SERIES    = ["DFII10", "DFII5", "DGS2", "FEDFUNDS"]
+FRED_STALE_DAYS = 3
 
-# ── PRICE STRIP TICKERS ───────────────────────────────────────────────────────
-# label: (yfinance_ticker, display_symbol)
+# ── SMC engine parameters ─────────────────────────────────────────────────────
+SMC_SWING_LENGTH  = 5
+SMC_SR_TOLERANCE  = 0.0015
+SMC_SR_MIN_HITS   = 2
+SMC_OB_EXTEND     = 40
+SMC_LOOKBACK_DAYS = 58
+
+# ── Timezones ─────────────────────────────────────────────────────────────────
+UTC_TZ     = timezone.utc
+NY_TZ      = timezone(timedelta(hours=-5))
+MOROCCO_TZ = timezone(timedelta(hours=1))
+
+# ── Session thresholds (decimal hours) ────────────────────────────────────────
+SETTLEMENT_NY        = 13.5   # 1:30 PM NY — CME gold settle
+SETTLEMENT_NY_HOUR   = 13.5   # alias for candle_validator
+MAINTENANCE_START    = 21.25  # 9:15 PM Morocco
+MAINTENANCE_END      = 22.0   # 10:00 PM Morocco
+MAINTENANCE_START_NY = 21.25  # same window referenced as NY decimal hour
+MAINTENANCE_END_NY   = 22.0
+
+# ── Stooq fallback ticker map ─────────────────────────────────────────────────
+STOOQ_MAP = {
+    "GC=F":     "GC.F",
+    "EURUSD=X": "EURUSD",
+    "JPY=X":    "JPYUSD",
+}
+
+# ── Price strip (symbol → yfinance ticker, ordered for frontend display) ──────
 PRICE_STRIP = {
     "XAU":    "GC=F",
     "SPX":    "^GSPC",
@@ -79,34 +81,46 @@ PRICE_STRIP = {
     "OIL":    "CL=F",
 }
 
-# ── SMC ENGINE ────────────────────────────────────────────────────────────────
-SMC_SWING_LENGTH = 5        # bars each side to qualify a swing high/low
-SMC_SR_TOLERANCE = 0.0015   # 0.15% price tolerance for S/R clustering
-SMC_SR_MIN_HITS  = 2        # minimum touches to confirm an S/R level
-SMC_OB_EXTEND    = 40       # max bars to extend an order block rectangle
-SMC_4H_BARS      = 200      # how many 4H candles to fetch for SMC analysis
+# ── News assets registry ──────────────────────────────────────────────────────
+NEWS_ASSETS = [
+    {"label": "XAU/USD", "ticker": "GC=F",      "color": "#f5c842",
+     "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GC%3DF&region=US&lang=en-US"},
+    {"label": "S&P 500", "ticker": "^GSPC",      "color": "#378ADD",
+     "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US"},
+    {"label": "Oil",     "ticker": "CL=F",       "color": "#D85A30",
+     "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=CL%3DF&region=US&lang=en-US"},
+    {"label": "Nasdaq",  "ticker": "^IXIC",      "color": "#7F77DD",
+     "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EIXIC&region=US&lang=en-US"},
+    {"label": "Bitcoin", "ticker": "BTC-USD",    "color": "#EF9F27",
+     "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD&region=US&lang=en-US"},
+    {"label": "Silver",  "ticker": "SI=F",       "color": "#B4B2A9",
+     "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SI%3DF&region=US&lang=en-US"},
+]
 
-# ── DOM / TCP ─────────────────────────────────────────────────────────────────
+GOLD_EFFECT_CONTEXT = {
+    "XAU/USD":  "Direct asset. Analyse its own technicals, macro drivers, and momentum.",
+    "S&P 500":  "Inverse risk-off proxy. Equity selloffs channel capital into gold.",
+    "Oil":      "Inflation driver. Rising oil lifts CPI expectations, compresses real yields → bullish gold.",
+    "Nasdaq":   "Risk appetite barometer. Nasdaq weakness precedes gold inflows.",
+    "Bitcoin":  "Competing safe haven. Stress: BTC sells first, gold benefits. Medium-term: both rise on USD weakness.",
+    "Silver":   "High-beta gold proxy. Amplifies gold moves. Supply deficit adds independent pressure.",
+}
+
+# ── UI color palette ──────────────────────────────────────────────────────────
+C_BG     = "#05070a"
+C_SURF   = "#0c0f14"
+C_SURF2  = "#111520"
+C_BORDER = "#1c2030"
+C_TEXT   = "#e2e8f0"
+C_MUTED  = "#5a6a80"
+C_GOLD   = "#f5c842"
+C_BUY    = "#10d988"
+C_SELL   = "#ff4d6a"
+C_PURPLE = "#a78bfa"
+C_BLUE   = "#378ADD"
+
+# ── Network ───────────────────────────────────────────────────────────────────
 TCP_HOST = "0.0.0.0"
 TCP_PORT = 5555
-
-# ── FASTAPI / WS ─────────────────────────────────────────────────────────────
-WS_HOST = "0.0.0.0"
-WS_PORT = 8000
-
-# ── CACHE ─────────────────────────────────────────────────────────────────────
-CACHE_TTL_SECONDS = 3600        # 1 hour: re-fetch signal / SMC after this
-PRICES_TTL_SECONDS = 30         # price strip refresh interval
-FRED_STALE_DAYS   = 2           # warn if FRED series older than this many days
-
-# ── UI COLOURS (mirrored in frontend for reference) ───────────────────────────
-C_BG    = "#05070a"
-C_SURF  = "#0c0f14"
-C_BORDER = "#1c2030"
-C_TEXT  = "#e2e8f0"
-C_MUTED = "#5a6a80"
-C_GOLD  = "#f5c842"
-C_BUY   = "#10d988"
-C_SELL  = "#ff4d6a"
-C_BID   = "#4a8fd4"
-C_ASK   = "#c94040"
+WS_HOST  = "0.0.0.0"
+WS_PORT  = 8000

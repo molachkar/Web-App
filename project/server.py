@@ -1,17 +1,17 @@
 """
 server.py
 FastAPI entry point for Sentinel trading terminal.
-Wires all routes and serves the frontend.
 
 Endpoints:
-    GET /          → serve index.html
-    GET /prices    → price strip data
-    GET /smc       → SMC levels
-    GET /signal    → ML signal
-    GET /status    → candle validator + safe window
-    GET /ranges    → intraday/weekly ranges
-    WS  /ws        → DOM broadcast
-    GET /health    → server stats
+    GET  /         → serve index.html
+    GET  /prices   → price strip
+    GET  /smc      → SMC levels (4H)
+    GET  /signal   → ML signal
+    GET  /status   → candle validator + safe window
+    GET  /ranges   → intraday / weekly ranges
+    GET  /health   → server stats + cache status
+    WS   /ws       → DOM broadcast
+    POST /cache/invalidate → force-clear mem cache
 """
 
 import asyncio
@@ -19,7 +19,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Set
 
 import uvicorn
@@ -27,19 +27,21 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
-# Import config first
-from core.config import WS_HOST, WS_PORT, TCP_HOST, TCP_PORT, FRONTEND_DIR, PROJECT_ROOT
-from core.cache import cache
+from core.config import (
+    WS_HOST, WS_PORT, TCP_HOST, TCP_PORT,
+    FRONTEND_DIR, DAYS_BACK,
+)
+from core.cache import disk, mem   # disk = daily pipeline cache, mem = route TTL cache
 
-# ── Logging setup ─────────────────────────────────────────────
+# ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S"
+    datefmt="%H:%M:%S",
 )
 log = logging.getLogger("sentinel.server")
 
-# ── HTML path ─────────────────────────────────────────────────
+# ── HTML ───────────────────────────────────────────────────────────────────────
 INDEX_PATH = os.path.join(FRONTEND_DIR, "index.html")
 
 if not os.path.exists(INDEX_PATH):
@@ -50,20 +52,17 @@ with open(INDEX_PATH, "r", encoding="utf-8") as _f:
 
 log.info(f"Loaded index.html from {INDEX_PATH}")
 
-# ── WebSocket clients ─────────────────────────────────────────
+# ── WebSocket state ────────────────────────────────────────────────────────────
 clients: Set[WebSocket] = set()
 stats = {"frames_rx": 0, "frames_tx": 0, "clients": 0}
 
 
-# ── BROADCAST ─────────────────────────────────────────────
+# ── Broadcast ──────────────────────────────────────────────────────────────────
 async def broadcast(raw: bytes):
     if not clients:
         return
     dead = set()
-    await asyncio.gather(
-        *[_send(ws, raw, dead) for ws in clients],
-        return_exceptions=True
-    )
+    await asyncio.gather(*[_send(ws, raw, dead) for ws in clients], return_exceptions=True)
     for ws in dead:
         clients.discard(ws)
         stats["clients"] = len(clients)
@@ -77,7 +76,7 @@ async def _send(ws, data, dead):
         dead.add(ws)
 
 
-# ── MT5 TCP HANDLER ───────────────────────────────────────
+# ── MT5 TCP handler ────────────────────────────────────────────────────────────
 async def handle_mt5(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info("peername")
     log.info(f"MT5 connected from {addr}")
@@ -109,7 +108,7 @@ async def tcp_server():
         await server.serve_forever()
 
 
-# ── LIFESPAN ──────────────────────────────────────────────
+# ── Lifespan ───────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(tcp_server())
@@ -123,11 +122,15 @@ async def lifespan(app: FastAPI):
         pass
 
 
-# ── APP ───────────────────────────────────────────────────
+# ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Sentinel Terminal", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+)
 
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def index():
@@ -160,20 +163,18 @@ async def ws_endpoint(ws: WebSocket):
 
 @app.get("/health")
 async def health():
-    return stats
+    return {**stats, "cache": mem.stats()}
 
 
 @app.get("/prices")
 async def prices():
-    """Return price strip data."""
-    cached = cache.get("prices")
-    if cached:
+    cached = mem.get("prices")
+    if cached is not None:
         return JSONResponse(cached)
-    
     try:
         from data.prices import fetch_price_strip
         result = fetch_price_strip()
-        cache.set("prices", result, ttl=30)
+        mem.set("prices", result, ttl=30)
         return JSONResponse(result)
     except Exception as e:
         log.error(f"/prices error: {e}")
@@ -182,21 +183,17 @@ async def prices():
 
 @app.get("/smc")
 async def smc():
-    """Return SMC levels."""
-    cached = cache.get("smc")
-    if cached:
+    cached = mem.get("smc")
+    if cached is not None:
         return JSONResponse(cached)
-    
     try:
         from smc.engine import fetch_smc_levels
         from data.prices import fetch_price_strip
-        
-        # Get current XAU price
-        prices = fetch_price_strip()
-        current = next((p["price"] for p in prices if p["symbol"] == "XAU"), 0)
-        
-        result = fetch_smc_levels(current)
-        cache.set("smc", result, ttl=3600)
+
+        strip   = fetch_price_strip()
+        current = next((p["price"] for p in strip if p["symbol"] == "XAU" and p["price"]), 0.0)
+        result  = fetch_smc_levels(float(current))
+        mem.set("smc", result, ttl=3600)
         return JSONResponse(result)
     except Exception as e:
         log.error(f"/smc error: {e}")
@@ -205,60 +202,42 @@ async def smc():
 
 @app.get("/signal")
 async def signal():
-    """Return ML signal."""
-    cached = cache.get("signal")
-    if cached:
-        # Remove non-serializable fields
-        result = {k: v for k, v in cached.items() 
-                  if k not in ["feat_df", "recent"]}
-        return JSONResponse(result)
-    
+    cached = mem.get("signal")
+    if cached is not None:
+        return JSONResponse(cached)
     try:
-        from ml.inference import load_artefacts, run_inference
-        from features.engineer import engineer_features
         from data.prices import fetch_ml_prices
         from data.fred import fetch_fred
-        
-        end = timedelta(days=0)
-        start = timedelta(days=520)
-        
-        prices = fetch_ml_prices(
-            datetime.utcnow() - start,
-            datetime.utcnow()
-        )
-        fred = fetch_fred(
-            datetime.utcnow() - start,
-            datetime.utcnow()
-        )
-        
-        combined = prices.join(fred, how="left").ffill().bfill()
-        feat_df = engineer_features(combined)
-        
+        from features.engineer import engineer_features
+        from ml.inference import load_artefacts, run_inference
+
+        end   = datetime.utcnow()
+        start = end - timedelta(days=DAYS_BACK)
+
+        prices  = fetch_ml_prices(start, end)
+        macro   = fetch_fred(start, end)
+        combined = prices.join(macro, how="left").ffill().bfill()
+        feat_df  = engineer_features(combined)
+
         model, calib, oof = load_artefacts()
         result = run_inference(feat_df, model, calib, oof)
-        
-        # Cache without non-serializable fields
-        cacheable = {k: v for k, v in result.items() 
-                     if k not in ["feat_df", "recent"]}
-        cache.set("signal", cacheable, ttl=3600)
-        
-        return JSONResponse(cacheable)
+
+        mem.set("signal", result, ttl=3600)
+        return JSONResponse(result)
     except Exception as e:
         log.error(f"/signal error: {e}")
-        return JSONResponse({}, status_code=500)
+        return JSONResponse({"signal": "ERROR", "error": str(e)}, status_code=500)
 
 
 @app.get("/status")
 async def status():
-    """Return candle status and safe window info."""
-    cached = cache.get("status")
-    if cached:
+    cached = mem.get("status")
+    if cached is not None:
         return JSONResponse(cached)
-    
     try:
         from data.candle_validator import candle_status
         result = candle_status()
-        cache.set("status", result, ttl=60)
+        mem.set("status", result, ttl=60)
         return JSONResponse(result)
     except Exception as e:
         log.error(f"/status error: {e}")
@@ -267,16 +246,30 @@ async def status():
 
 @app.get("/ranges")
 async def ranges():
-    """Return intraday and weekly ranges."""
+    # Short TTL — ranges change every few minutes
+    cached = mem.get("ranges")
+    if cached is not None:
+        return JSONResponse(cached)
     try:
         from market.ranges import fetch_ranges
         result = fetch_ranges()
+        mem.set("ranges", result, ttl=120)
         return JSONResponse(result)
     except Exception as e:
         log.error(f"/ranges error: {e}")
         return JSONResponse({}, status_code=500)
 
 
+@app.post("/cache/invalidate")
+async def invalidate_cache():
+    """Force-clear all in-memory route caches."""
+    mem.invalidate()
+    return {"status": "ok", "message": "All route caches cleared"}
+
+
 if __name__ == "__main__":
-    uvicorn.run("server:app", host=WS_HOST, port=WS_PORT,
-                log_level="info", access_log=False)
+    uvicorn.run(
+        "server:app",
+        host=WS_HOST, port=WS_PORT,
+        log_level="info", access_log=False,
+    )
