@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 # Import config first
-from core.config import WS_HOST, WS_PORT, TCP_HOST, TCP_PORT, FRONTEND_DIR
+from core.config import WS_HOST, WS_PORT, TCP_HOST, TCP_PORT, FRONTEND_DIR, PROJECT_ROOT
 from core.cache import cache
 
 # ── Logging setup ─────────────────────────────────────────────

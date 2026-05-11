@@ -16,11 +16,11 @@ import threading
 import logging
 from typing import Any, Optional
 
-from core.config import ROOT_DIR, CACHE_TTL_SECONDS
+from core.config import PROJECT_ROOT, CACHE_TTL_SECONDS
 
 log = logging.getLogger("sentinel.cache")
 
-CACHE_FILE = os.path.join(ROOT_DIR, ".cache.json")
+CACHE_FILE = os.path.join(PROJECT_ROOT, ".cache.json")
 
 
 class DiskCache:

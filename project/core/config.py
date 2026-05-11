@@ -10,11 +10,14 @@ from datetime import timezone, timedelta
 # ── ROOT ──────────────────────────────────────────────────────────────────────
 # Get the directory where this config file is located
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-# Project root is two levels up from core/config.py
-ROOT_DIR   = os.path.dirname(os.path.dirname(CONFIG_DIR))
-ARTEFACT_DIR  = os.path.join(ROOT_DIR, "ml", "artefacts")
-FRED_CACHE_DIR = os.path.join(ROOT_DIR, "fred_cache")
-FRONTEND_DIR  = os.path.join(ROOT_DIR, "frontend")
+# Project root is one level up from core/config.py (since core/ is inside project/)
+PROJECT_ROOT = CONFIG_DIR  # Already at project level since we're in core/
+if os.path.basename(CONFIG_DIR) == "core":
+    PROJECT_ROOT = os.path.dirname(CONFIG_DIR)
+
+ARTEFACT_DIR  = os.path.join(PROJECT_ROOT, "ml", "artefacts")
+FRED_CACHE_DIR = os.path.join(PROJECT_ROOT, "fred_cache")
+FRONTEND_DIR  = os.path.join(PROJECT_ROOT, "frontend")
 
 # ── TIMEZONES ─────────────────────────────────────────────────────────────────
 NY_TZ      = timezone(timedelta(hours=-5))   # EST (no DST handling; adjust if needed)
