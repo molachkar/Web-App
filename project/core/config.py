@@ -8,7 +8,10 @@ import os
 from datetime import timezone, timedelta
 
 # ── ROOT ──────────────────────────────────────────────────────────────────────
-ROOT_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Get the directory where this config file is located
+CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+# Project root is two levels up from core/config.py
+ROOT_DIR   = os.path.dirname(os.path.dirname(CONFIG_DIR))
 ARTEFACT_DIR  = os.path.join(ROOT_DIR, "ml", "artefacts")
 FRED_CACHE_DIR = os.path.join(ROOT_DIR, "fred_cache")
 FRONTEND_DIR  = os.path.join(ROOT_DIR, "frontend")

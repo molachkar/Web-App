@@ -1,0 +1,14 @@
+21:53:13.297 [INFO] Loaded index.html from /workspace/project/frontend/index.html
+21:53:13.385 [INFO] Loaded index.html from /workspace/project/frontend/index.html
+INFO:     Started server process [1199]
+INFO:     Waiting for application startup.
+21:53:13.396 [INFO] WS endpoint → ws://localhost:8000/ws
+21:53:13.396 [INFO] Dashboard  → http://localhost:8000/
+INFO:     Application startup complete.
+21:53:13.397 [INFO] TCP listening on 0.0.0.0:5555
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+OpenBLAS WARNING - could not determine the L2 cache size on this system, assuming 256k
+21:53:22.680 [ERROR] /prices error: No module named 'yfinance'
+21:53:24.497 [ERROR] /smc error: No module named 'yfinance'
+21:53:26.676 [ERROR] /signal error: No module named 'yfinance'
+21:53:31.399 [ERROR] /ranges error: No module named 'yfinance'
