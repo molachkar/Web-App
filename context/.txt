@@ -1,0 +1,118 @@
+context : well the whole idea of this project is build a fully well informed trading web page that i will use for 
+my trading routine, the app is allready in its second version that i will try to combine what is allready in the gold interface.py
+and the gold singal.py, index.html, server.py and all that in one app, each one of the weidget will be coded again and 
+again until we reached a version that is good for use example(smc levels at first simpe detector, then we find a way to make it track
+market live, then we find a way to make it mentor any little tick movment of the market, then we add some math to it to make it more solid
+and goes...) meaning the first result isnt fix the files will be in constant updating until i reached a version that is 
+quant level. weidets will be added atferwords like (live news, heatmaps and all that but lets focus on the basics right now)
+
+entended loutput:
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ HEADER: Logo  [price strip: XAU·SPX·NAS·BTC·SILVER·EUR·JPY·OIL·...]   │
+│                                        Morocco HH:MM  ·  NY HH:MM      │
+├─────────────────┬───────────────────────────────┬───────────────────────┤
+│  SMC LEVELS     │   TRADINGVIEW 4H OANDA        │   DOM LADDER          │
+│                 │                               │                       │
+│  Resistance     │                               │  ┌─ HEADER ─────────┐ │
+│  ─── price ───  │   (TV embed, dark, no tools)  │  │ Bid · Sprd · Ask │ │
+│  Support        │                               │  ├──────────────────┤ │
+│                 │                               │  │ Vol Δ · VWAP     │ │
+│  280px fixed    │   flex 1                      │  │ Cum Δ · ATR      │ │
+│                 │                               │  ├──────────────────┤ │
+│                 │                               │  │ ASK vol | price  │ │
+│                 │                               │  │         | BID vol│ │
+│                 │                               │  │ (ladder rows)    │ │
+│                 │                               │  ├──────────────────┤ │
+│                 │                               │  │ Imbalance bar    │ │
+│                 │                               │  │ Time & Sales     │ │
+│                 │                               │  └──────────────────┘ │
+│                 │                               │   320px fixed         │
+├─────────────────┴───────────────┬───────────────┴───────────────────────┤
+│  ML SIGNAL                      │  STATUS BAR                           │
+│                                 │                                       │
+│  BUY / SELL / NO SIGNAL badge   │  Safe run window (color coded)        │
+│  Win prob · Pred Z · Close      │  Candle status · FRED ages            │
+│  Bull trend · Macro · BB%B      │  Data source · Cache status           │
+│  EMA200 · Regime                │  Intraday range · Weekly range        │
+└─────────────────────────────────┴───────────────────────────────────────┘
+
+
+project files:
+
+project/
+│
+├── server.py                  ← FastAPI entry point, routes only
+│
+├── core/
+│   ├── __init__.py
+│   ├── config.py              ← all constants, thresholds, API keys
+│   ├── scheduler.py           ← background tasks, auto-refresh logic
+│   └── cache.py               ← daily cache read/write
+│
+├── data/
+│   ├── __init__.py
+│   ├── prices.py              ← yfinance + stooq fetcher, price strip
+│   ├── fred.py                ← FRED API + local CSV fallback
+│   ├── mt5.py                 ← MT5 candles + DOM TCP handler
+│   └── candle_validator.py    ← candle settlement + timezone logic
+│
+├── features/
+│   ├── __init__.py
+│   └── engineer.py            ← all feature engineering in one place
+│
+├── ml/
+│   ├── __init__.py
+│   ├── inference.py           ← LightGBM + calibrator pipeline
+│   └── artefacts/             ← pkl files + oof csv live here
+│       ├── cv_best_fold_model.pkl
+│       ├── calibrator.pkl
+│       └── cv_predictions_oof.csv
+│
+├── smc/
+│   ├── __init__.py
+│   └── engine.py              ← swings, BOS, CHoCH, OB, S/R, 4H fetch
+│
+├── dom/
+│   ├── __init__.py
+│   └── handler.py             ← TCP server, broadcast, delta, VWAP, T&S
+│
+├── market/
+│   ├── __init__.py
+│   └── ranges.py              ← intraday range, weekly range
+│
+├── fred_cache/                ← local FRED CSV fallbacks
+│   ├── DFII10.csv
+│   ├── DFII5.csv
+│   ├── DGS2.csv
+│   └── FEDFUNDS.csv
+│
+└── frontend/
+    └── index.html             ← single page terminal UI
+
+building order: 
+
+1. core/config.py          ← no dependencies
+2. core/cache.py           ← depends on config
+3. data/fred.py            ← depends on config
+4. data/prices.py          ← depends on config
+5. data/candle_validator.py← depends on config
+6. features/engineer.py    ← depends on config
+7. ml/inference.py         ← depends on features, config
+8. smc/engine.py           ← depends on config
+9. market/ranges.py        ← depends on prices
+10. dom/handler.py         ← depends on config
+11. core/scheduler.py      ← depends on everything above
+12. server.py              ← imports all, wires routes
+13. frontend/index.html    ← built last, calls clean JSON endpoints
+
+calling logic: 
+
+@app.get("/signal")      → data pipeline → ml inference → return JSON
+@app.get("/smc")         → fetch 4H → smc engine → return JSON  
+@app.get("/prices")      → price strip → return JSON
+@app.get("/candles")     → mt5 candles → return JSON
+@app.get("/status")      → candle validator + safe window → return JSON
+@app.websocket("/ws")    → DOM broadcast
+@app.get("/")            → serve index.html
+
