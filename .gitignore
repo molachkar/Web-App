@@ -1,10 +1,1 @@
-```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Cache files
-.cache.json
-```
+(project/frontend/index.html)
