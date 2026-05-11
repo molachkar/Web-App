@@ -1,4 +1,5 @@
 ```
-# No build artifacts, dependencies, or temporary files detected in changes
-# Only source/config files present (.html, .py) - no ignores needed
+# Compressed files
+*.tar.gz
+*.tar.gz.b64
 ```
