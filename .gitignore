@@ -1,5 +1,10 @@
 ```
-# Compressed files
-*.tar.gz
-*.tar.gz.b64
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Cache files
+.cache.json
 ```
