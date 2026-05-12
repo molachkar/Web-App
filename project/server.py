@@ -15,7 +15,6 @@ Endpoints:
 """
 
 import asyncio
-import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -31,7 +30,8 @@ from core.config import (
     WS_HOST, WS_PORT, TCP_HOST, TCP_PORT,
     FRONTEND_DIR, DAYS_BACK,
 )
-from core.cache import disk, mem   # disk = daily pipeline cache, mem = route TTL cache
+from core.cache import disk, mem
+from dom.handler import broadcast, tcp_server, get_dom_stats, clients, stats
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -52,68 +52,13 @@ with open(INDEX_PATH, "r", encoding="utf-8") as _f:
 
 log.info(f"Loaded index.html from {INDEX_PATH}")
 
-# ── WebSocket state ────────────────────────────────────────────────────────────
-clients: Set[WebSocket] = set()
-stats = {"frames_rx": 0, "frames_tx": 0, "clients": 0}
-
-
-# ── Broadcast ──────────────────────────────────────────────────────────────────
-async def broadcast(raw: bytes):
-    if not clients:
-        return
-    dead = set()
-    await asyncio.gather(*[_send(ws, raw, dead) for ws in clients], return_exceptions=True)
-    for ws in dead:
-        clients.discard(ws)
-        stats["clients"] = len(clients)
-
-
-async def _send(ws, data, dead):
-    try:
-        await ws.send_bytes(data)
-        stats["frames_tx"] += 1
-    except Exception:
-        dead.add(ws)
-
-
-# ── MT5 TCP handler ────────────────────────────────────────────────────────────
-async def handle_mt5(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    addr = writer.get_extra_info("peername")
-    log.info(f"MT5 connected from {addr}")
-    try:
-        while True:
-            line = await reader.readline()
-            if not line:
-                break
-            line = line.strip()
-            if not line or line[0] != ord(b'{'):
-                continue
-            try:
-                json.loads(line)
-            except Exception:
-                continue
-            stats["frames_rx"] += 1
-            await broadcast(line)
-    except Exception as e:
-        log.warning(f"MT5 connection error: {e}")
-    finally:
-        writer.close()
-        log.info(f"MT5 disconnected: {addr}")
-
-
-async def tcp_server():
-    server = await asyncio.start_server(handle_mt5, TCP_HOST, TCP_PORT)
-    log.info(f"TCP listening on {TCP_HOST}:{TCP_PORT}")
-    async with server:
-        await server.serve_forever()
-
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(tcp_server())
-    log.info(f"WS endpoint → ws://localhost:{WS_PORT}/ws")
-    log.info(f"Dashboard  → http://localhost:{WS_PORT}/")
+    log.info(f"WS  → ws://localhost:{WS_PORT}/ws")
+    log.info(f"UI  → http://localhost:{WS_PORT}/")
     yield
     task.cancel()
     try:
@@ -163,7 +108,7 @@ async def ws_endpoint(ws: WebSocket):
 
 @app.get("/health")
 async def health():
-    return {**stats, "cache": mem.stats()}
+    return {**get_dom_stats(), "cache": mem.stats()}
 
 
 @app.get("/prices")
@@ -211,11 +156,10 @@ async def signal():
         from features.engineer import engineer_features
         from ml.inference import load_artefacts, run_inference
 
-        end   = datetime.utcnow()
-        start = end - timedelta(days=DAYS_BACK)
-
-        prices  = fetch_ml_prices(start, end)
-        macro   = fetch_fred(start, end)
+        end      = datetime.utcnow()
+        start    = end - timedelta(days=DAYS_BACK)
+        prices   = fetch_ml_prices(start, end)
+        macro    = fetch_fred(start, end)
         combined = prices.join(macro, how="left").ffill().bfill()
         feat_df  = engineer_features(combined)
 
@@ -224,9 +168,15 @@ async def signal():
 
         mem.set("signal", result, ttl=3600)
         return JSONResponse(result)
+
     except Exception as e:
         log.error(f"/signal error: {e}")
-        return JSONResponse({"signal": "ERROR", "error": str(e)}, status_code=500)
+        # BUG 8 FIX: cache the error so repeated failures don't re-run the full
+        # expensive pipeline on every frontend poll (every 60 s).
+        # Short TTL (120 s) so it retries after 2 minutes, not immediately.
+        error_result = {"signal": "ERROR", "error": str(e)}
+        mem.set("signal", error_result, ttl=120)
+        return JSONResponse(error_result, status_code=500)
 
 
 @app.get("/status")
@@ -246,7 +196,6 @@ async def status():
 
 @app.get("/ranges")
 async def ranges():
-    # Short TTL — ranges change every few minutes
     cached = mem.get("ranges")
     if cached is not None:
         return JSONResponse(cached)
@@ -262,7 +211,6 @@ async def ranges():
 
 @app.post("/cache/invalidate")
 async def invalidate_cache():
-    """Force-clear all in-memory route caches."""
     mem.invalidate()
     return {"status": "ok", "message": "All route caches cleared"}
 

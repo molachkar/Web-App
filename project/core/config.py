@@ -54,12 +54,12 @@ UTC_TZ     = timezone.utc
 NY_TZ      = timezone(timedelta(hours=-5))
 MOROCCO_TZ = timezone(timedelta(hours=1))
 
-# ── Session thresholds (decimal hours) ────────────────────────────────────────
-SETTLEMENT_NY        = 13.5   # 1:30 PM NY — CME gold settle
-SETTLEMENT_NY_HOUR   = 13.5   # alias for candle_validator
-MAINTENANCE_START    = 21.25  # 9:15 PM Morocco
-MAINTENANCE_END      = 22.0   # 10:00 PM Morocco
-MAINTENANCE_START_NY = 21.25  # same window referenced as NY decimal hour
+# ── Session thresholds (decimal hours, NY time) ───────────────────────────────
+SETTLEMENT_NY        = 13.5    # 1:30 PM NY — CME gold settle
+SETTLEMENT_NY_HOUR   = 13.5    # alias used by candle_validator
+MAINTENANCE_START    = 21.25   # 9:15 PM NY — CME maintenance begins
+MAINTENANCE_END      = 22.0    # 10:00 PM NY — CME maintenance ends
+MAINTENANCE_START_NY = 21.25   # same, referenced explicitly as NY decimal hour
 MAINTENANCE_END_NY   = 22.0
 
 # ── Stooq fallback ticker map ─────────────────────────────────────────────────
@@ -83,17 +83,17 @@ PRICE_STRIP = {
 
 # ── News assets registry ──────────────────────────────────────────────────────
 NEWS_ASSETS = [
-    {"label": "XAU/USD", "ticker": "GC=F",      "color": "#f5c842",
+    {"label": "XAU/USD", "ticker": "GC=F",   "color": "#f5c842",
      "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GC%3DF&region=US&lang=en-US"},
-    {"label": "S&P 500", "ticker": "^GSPC",      "color": "#378ADD",
+    {"label": "S&P 500", "ticker": "^GSPC",  "color": "#378ADD",
      "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US"},
-    {"label": "Oil",     "ticker": "CL=F",       "color": "#D85A30",
+    {"label": "Oil",     "ticker": "CL=F",   "color": "#D85A30",
      "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=CL%3DF&region=US&lang=en-US"},
-    {"label": "Nasdaq",  "ticker": "^IXIC",      "color": "#7F77DD",
+    {"label": "Nasdaq",  "ticker": "^IXIC",  "color": "#7F77DD",
      "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EIXIC&region=US&lang=en-US"},
-    {"label": "Bitcoin", "ticker": "BTC-USD",    "color": "#EF9F27",
+    {"label": "Bitcoin", "ticker": "BTC-USD","color": "#EF9F27",
      "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD&region=US&lang=en-US"},
-    {"label": "Silver",  "ticker": "SI=F",       "color": "#B4B2A9",
+    {"label": "Silver",  "ticker": "SI=F",   "color": "#B4B2A9",
      "rss": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SI%3DF&region=US&lang=en-US"},
 ]
 
@@ -124,3 +124,7 @@ TCP_HOST = "0.0.0.0"
 TCP_PORT = 5555
 WS_HOST  = "0.0.0.0"
 WS_PORT  = 8000
+
+# ── Cache TTLs  (BUG 1 FIX — were missing, crashed scheduler.py on import) ───
+CACHE_TTL_SECONDS  = 3600   # 1 hour  — signal + SMC route cache
+PRICES_TTL_SECONDS = 30     # 30 secs — price strip route cache
